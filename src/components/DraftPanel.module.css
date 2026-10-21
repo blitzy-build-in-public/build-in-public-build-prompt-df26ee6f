@@ -1,0 +1,159 @@
+/*
+ * Draft panel styles - the region holding the generated draft, its live character count
+ * and the Copy/Download actions (Component 14 of the plan; FR-6).
+ *
+ * Every value comes from the custom properties `src/app/globals.css` declares on :root.
+ * This module owns layout and state only: it declares no colour, spacing step, radius or
+ * type size of its own, so the palette that meets the WCAG 2.1 AA contrast floor stays
+ * defined in exactly one place. Class names are camelCase and are the names
+ * `src/components/DraftPanel.tsx` looks up.
+ */
+
+/* The region: label, draft field, meta row and the transient confirmation, stacked in one
+   column with the gaps drawn between them. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  /* The readable measure is capped here rather than on the textarea, so the count and the
+     actions below stay exactly as wide as the field they belong to. */
+  max-width: var(--measure);
+}
+
+/* The visible label above the draft. */
+.label {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* The draft, edited in place as text: monospace, full width, at least a dozen lines tall,
+   and growable downwards. The field is defined by its border rather than by a background
+   of its own, so it reads the same whether the region sits on the page background or on a
+   surface card. */
+.draft {
+  display: block;
+  width: 100%;
+  min-height: 18rem;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--line-height-normal);
+  /* Wraps at the space where there is one and inside an unbroken token where there is
+     not, so a long URL in a draft never forces horizontal scrolling. */
+  overflow-wrap: break-word;
+  /* Width follows the panel; only the height is the reader's to drag. */
+  resize: vertical;
+}
+
+/*
+ * Focus.
+ * The ring is drawn from the global focus tokens rather than from a literal, so the draft
+ * field and both buttons match every other control on the page. The draft is focused
+ * programmatically when generation completes, which is why the textarea - a text entry
+ * control - must show the ring whenever it holds focus.
+ */
+.draft:focus-visible,
+.button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The row under the field: character count on one side, actions on the other. It wraps
+   rather than overflowing, which is what keeps the region usable at 320px. */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+/* The live count: muted rather than faded, so it still reads at AA contrast. Tabular
+   figures keep it from jittering as digits are appended while the draft streams. */
+.charCount {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The Copy/Download group. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A secondary action. The page's primary Generate button lives in
+   `PromptGenerator.module.css`, so these read as outlined controls on the surface. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px at the default root size: a pointer target, not a text label. */
+  min-height: 2.75rem;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Hover feedback only where the pointer can actually hover, so a touch device never
+   leaves a button stuck in its hover state. */
+@media (hover: hover) {
+  .button:hover {
+    background-color: var(--color-bg);
+    border-color: var(--color-text-muted);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .button {
+    transition:
+      background-color 200ms ease-out,
+      border-color 200ms ease-out;
+  }
+}
+
+/* Disabled until there is a draft to copy or download. The state is not left to colour
+   alone: the fill drops from the surface to the page background, so a disabled button
+   reads as recessed rather than outlined even in monochrome, the label keeps the muted
+   token (6.95:1 on that fill, still AA) instead of being faded below legibility, and the
+   cursor carries the rest of the signal. The `disabled` attribute remains what reports
+   the state to assistive technology. */
+.button:disabled,
+.buttonDisabled {
+  border-color: var(--color-border);
+  background-color: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* The transient copy confirmation, or the sentence saying the copy failed, on a line
+   beneath the actions. That line is reserved while the sentence is absent, so the field
+   above does not move when it appears. */
+.confirmation {
+  font-size: var(--text-sm);
+  line-height: var(--line-height-normal);
+  min-height: calc(1em * var(--line-height-normal));
+  color: var(--color-text-muted);
+}
+
+/* Streaming state, applied to the panel while the draft is still arriving: the field it
+   is arriving in takes the accent boundary, so the region reads as active without the
+   draft text itself being dimmed or faded. */
+.busy .draft {
+  border-color: var(--color-accent);
+}

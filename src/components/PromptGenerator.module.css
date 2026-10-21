@@ -1,0 +1,215 @@
+/*
+ * Input region styles for the PromptGenerator client controller (plan Component 12).
+ *
+ * This is the stylesheet of the page's top region: the instruction line rendered
+ * verbatim, the pasted-requirements field and the Generate action. It styles that
+ * region only - the file picker, the status banner and the draft panel each have
+ * their own stylesheet, and page-level layout belongs to src/app/page.module.css.
+ *
+ * Every value below is a custom property declared once in src/app/globals.css, the
+ * project's token layer: this file declares no colour, spacing step, radius or type
+ * size of its own, so the palette that carries the WCAG 2.1 AA contrast (NFR-4) and
+ * the vertical rhythm cannot drift between stylesheets. globals.css also owns the
+ * base element rules, including the single :focus ring every control below relies on
+ * - nothing here removes it. No design system is specified for this product, so there
+ * is no component API or token set to align to.
+ *
+ * Class names are camelCase because the component reads them as `styles.region` and
+ * the rest, and every class the component names is declared here: a name it uses that
+ * is missing from this file would leave that element silently unstyled.
+ */
+
+/*
+ * The region itself, rendered by the component as a <section>.
+ *
+ * One column at every width - 0.5.4 stacks the two regions rather than placing them
+ * side by side - so the rhythm inside the region is a flex gap and never a horizontal
+ * arrangement. The surface and border group the inputs into one region; the width
+ * comes from the page's column, so no maximum width is set here.
+ */
+.region {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-surface);
+}
+
+/*
+ * Applied while a request is in flight, from Generate until the stream ends.
+ *
+ * The cue changes colour only - never a width, a height, a padding or an offset -
+ * because 0.5.4 requires the inputs to stay visible and unchanged while the draft
+ * streams, and anything that resized a box would shift the controls under the pointer.
+ */
+.busy {
+  border-inline-start-color: var(--color-accent);
+  background-color: var(--color-bg);
+}
+
+/*
+ * The instruction line: the user's own sentence, rendered verbatim, and the region's
+ * heading. It takes the scale below the page title rather than body size, so it reads
+ * as the first thing in the region, and it is bounded to a readable measure so it
+ * wraps cleanly at 320px and does not run the width of a wide viewport.
+ */
+.instruction {
+  max-width: var(--measure);
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+  text-wrap: pretty;
+}
+
+/* The pasted-requirements field: its label, its textarea and its character counter. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The visible label bound to the textarea; the component supplies the association. */
+.label {
+  color: var(--color-text);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+/*
+ * The requirements textarea. Full width of the field, tall enough for six to eight
+ * visible lines of prose (8 x 1.6rem line boxes, plus padding and border), and
+ * wrapping on so a long unbroken token pasted into it cannot push the field wider
+ * than the page column. Vertical resize is left to the base rule in globals.css.
+ */
+.textarea {
+  width: 100%;
+  min-height: 12rem;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--line-height-normal);
+  overflow-wrap: break-word;
+}
+
+/*
+ * Keyboard focus on the requirements field. The ring comes from the global :focus
+ * rule in globals.css, which also draws it around the Generate button; the border
+ * colour added here makes the focused field unmistakable where a thin outline alone
+ * is easy to miss. `:focus-visible` keeps it off a pointer click.
+ */
+.textarea:focus-visible {
+  border-color: var(--color-focus);
+}
+
+/*
+ * The field while a request is in flight: the component disables it so the submitted
+ * requirements cannot drift from what the request carried, and the requirement is that
+ * the inputs stay visible and where they were rather than that they look unchanged.
+ * Only the text dims, and it stays legible (7.53:1); the fill is not muted to the page
+ * colour the way a disabled button's is, because the region behind it has already
+ * muted its own surface while busy and a second muted fill would erase the field's edge.
+ */
+.textarea:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/*
+ * The live character count against the textarea's limit. Secondary emphasis, but a
+ * legible one (muted text on the surface), and the component states the count in
+ * words, so nothing here depends on colour to be read.
+ */
+.counter {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+/*
+ * The action row holding the primary action. It wraps instead of overflowing, so
+ * Generate stays in view and reachable at 320px.
+ */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/*
+ * Generate: the strongest call to action on the screen, filled with the accent where
+ * the secondary actions in the other stylesheets are outlined. Its 1px border matches
+ * theirs so the buttons share a baseline in any action row, and its padding keeps the
+ * control above the 44px minimum target in every state.
+ */
+.button {
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background-color: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/*
+ * Hover and press. The token layer declares no darker accent step, so the darker
+ * focus blue is reused as the pressed shade rather than inventing a colour here. Hover
+ * sits inside `@media (hover: hover)` so a touch device cannot leave it stuck on after
+ * a tap, and both states are guarded against the disabled states, so a control that
+ * cannot be pressed never lights up as though it could.
+ */
+@media (hover: hover) {
+  .button:hover:not(:disabled):not(.buttonDisabled) {
+    border-color: var(--color-focus);
+    background-color: var(--color-focus);
+  }
+}
+
+.button:active:not(:disabled):not(.buttonDisabled) {
+  border-color: var(--color-focus);
+  background-color: var(--color-focus);
+}
+
+/*
+ * Disabled Generate: before anything has been entered, and while a generation streams.
+ * The filled accent gives way to the page's muted surface and a muted label that is
+ * still legible on it, so the control cannot be mistaken for an available one. The
+ * class is styled alongside the native state because the component marks the button
+ * disabled with both, and either one alone must be enough to read correctly.
+ */
+.button:disabled,
+.buttonDisabled {
+  border-color: var(--color-border);
+  background-color: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/*
+ * Motion. Both transitions are opt-in, so a reader who asks for reduced motion gets
+ * the same colours with no fade, and the busy cue of the region appears instantly.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .region {
+    transition:
+      background-color 200ms ease-out,
+      border-inline-start-color 200ms ease-out;
+  }
+
+  .button {
+    transition:
+      background-color 150ms ease-out,
+      border-color 150ms ease-out;
+  }
+}

@@ -2,7 +2,6 @@
   "name": "build-prompt-generator",
   "version": "0.1.0",
   "private": true,
-  "description": "Single-screen web application that turns an uploaded file or pasted requirements into a streamed draft build prompt.",
   "engines": {
     "node": ">=22.22.2",
     "npm": ">=11.21.0"

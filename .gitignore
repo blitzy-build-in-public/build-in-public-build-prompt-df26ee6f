@@ -4,18 +4,18 @@ node_modules/
 # Next.js build output
 .next/
 out/
-next-env.d.ts
+# next-env.d.ts is deliberately not ignored: it is a generated artefact this
+# repository commits, so a fresh checkout type-checks before its first build.
 
 # Test and coverage output
 coverage/
 playwright-report/
 test-results/
 blob-report/
-playwright/.cache/
 
-# Environment files (keep the template)
-.env
-.env.*
+# Environment files: a real .env holds the provider credential and is never
+# committed, while .env.example carries placeholders and stays tracked.
+.env*
 !.env.example
 
 # Logs
@@ -30,3 +30,4 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+*.swp

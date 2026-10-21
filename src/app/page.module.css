@@ -1,0 +1,70 @@
+/*
+ * Page shell: the layout of the single screen and the vertical rhythm between its regions.
+ *
+ * Every value below is a token declared in `src/app/globals.css`, which the root layout
+ * loads once for the document; this module owns region layout and spacing only and declares
+ * no colour, spacing step, radius or type size of its own. `src/app/page.tsx` imports it as
+ * `styles`, so the class names are a contract shared with that file: a name only one of the
+ * two carries renders as an undefined className rather than failing a build.
+ *
+ * The layout is one fluid column, bounded by `--container-max` with a token-clamped inline
+ * padding, so it is usable from 320px upward without a breakpoint of its own.
+ */
+
+/* The page column: the header, the input, warnings and draft regions, and the footer, in that
+   order and never side by side. */
+.page {
+  display: flex;
+  flex-direction: column;
+  /* Between regions. Clamped between two steps of the spacing scale, so a narrow screen gets
+     the tighter rhythm and a wide one never exceeds the widest step the scale defines. */
+  gap: clamp(var(--space-5), 4vw, var(--space-7));
+  width: 100%;
+  max-width: var(--container-max);
+  margin-inline: auto;
+  /* The --space-4 floor keeps 16px of inset at the narrowest supported width, and the --space-6
+     ceiling holds the reading column in proportion once the viewport is wide. */
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-6));
+  padding-block: var(--space-6) var(--space-7);
+}
+
+/* The product title. The request's own sentence is rendered verbatim by the input region
+   below it, so the header carries the title alone. */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.title {
+  /* Fluid between two steps of the type scale: the smaller step keeps a long title to one or
+     two lines at 320px, and the larger applies once there is room for it. */
+  font-size: clamp(var(--text-lg), 2.5vw, var(--text-xl));
+  line-height: var(--line-height-tight);
+  max-width: var(--measure);
+}
+
+/* The working area: the requirements the reader supplies, the warnings they need to read and
+   the draft they edit. */
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  /* A column flex child is otherwise as wide as its widest content, so a long file name or an
+     unbroken string in the draft would widen the page past the viewport. */
+  min-width: 0;
+}
+
+/* What happens to the reader's input, stated where they finish reading. The rule spans the
+   column while the sentence under it keeps the reading measure, so the separator is not cut
+   short on a wide screen. */
+.footer {
+  border-block-start: 1px solid var(--color-border);
+  padding-block-start: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.footer p {
+  max-width: var(--measure);
+}

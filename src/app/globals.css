@@ -1,0 +1,205 @@
+/*
+ * Global design tokens, base element styles and the focus treatment.
+ *
+ * This file is the project's token layer: `src/app/page.module.css` and the four
+ * `src/components/*.module.css` stylesheets consume the custom properties declared
+ * below, and no other stylesheet declares a colour, spacing step, radius or type size
+ * of its own.
+ *
+ * The layer sits in a global stylesheet rather than in a component module because CSS
+ * Modules scope class names but not custom properties: a module stylesheet cannot
+ * publish a token to its siblings, while custom properties declared on :root inherit
+ * into every module in the document. No design system or CSS framework is specified
+ * for this product, so this file is what stands in their place.
+ *
+ * Plain CSS only - no @import and no @font-face, so a page load fetches nothing from
+ * another origin, and nothing here needs a build step beyond Next.js's own CSS
+ * pipeline.
+ */
+
+:root {
+  /*
+   * Colour.
+   * Ratios are WCAG 2.1 relative-luminance contrast ratios, computed against the
+   * surfaces each colour is used on. Text colours clear the 4.5:1 AA floor for normal
+   * text; borders and the focus ring clear the 3:1 floor for non-text indicators.
+   * State colours are always paired with a word ("Rejected", "Truncated"), never
+   * carried by colour alone, so a warning still reads in monochrome.
+   */
+  --color-bg: #f4f6f8; /* page background; the ratios below are quoted against it */
+  --color-surface: #ffffff; /* panels, controls and the draft field - the lighter surface */
+  --color-border: #848c9a; /* 3.39:1 on surface, 3.13:1 on bg - control outlines */
+  --color-text: #17202a; /* 16.45:1 on surface, 15.19:1 on bg */
+  --color-text-muted: #4a5568; /* 7.53:1 on surface, 6.95:1 on bg */
+  --color-accent: #1d4ed8; /* itself 6.71:1 on surface; white text on it 6.70:1 */
+  --color-on-accent: #ffffff; /* 6.70:1 on accent */
+  --color-focus: #0b4fbf; /* 7.28:1 on surface, 6.72:1 on bg */
+  --color-error: #b3261e; /* 6.54:1 on surface, 6.03:1 on bg */
+  --color-warning: #8a5a00; /* 5.93:1 on surface, 5.47:1 on bg */
+  --color-success: #146c43; /* 6.45:1 on surface, 5.95:1 on bg */
+
+  /*
+   * Spacing. One numeric scale for every margin, padding and gap in the interface, so
+   * vertical rhythm cannot drift between stylesheets.
+   */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Corner radius. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  /*
+   * Typography. Both stacks are system stacks, so no font file is fetched; sizes are
+   * in rem so a reader who raises their browser's text size gets larger text.
+   */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.6;
+
+  /*
+   * Layout. `--container-max` bounds the content column without pinning it to a pixel
+   * width, so the interface stays fluid down to 320px; `--measure` is the readable
+   * line length for prose blocks.
+   */
+  --container-max: 64rem;
+  --measure: 72ch;
+
+  /* Focus treatment: one ring for the whole application (see the focus rules below). */
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--color-focus);
+}
+
+/*
+ * Base elements.
+ * Only rules that belong to the document as a whole live here; anything that names a
+ * component or a region belongs to that component's own stylesheet.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* Stops mobile browsers from inflating text, and pins the interface to the light
+     palette the tokens above define - there is no dark theme. */
+  -webkit-text-size-adjust: 100%;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--line-height-normal);
+  /* A long unbroken token pasted into the page must not force horizontal scrolling at
+     the narrowest supported width. */
+  overflow-wrap: break-word;
+}
+
+/* Headings carry no margin. The region and component stylesheets own the space between
+   elements with flex/grid gap, and a margin here would double it up. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+}
+
+h1 {
+  font-size: var(--text-xl);
+}
+
+h2 {
+  font-size: var(--text-lg);
+}
+
+h3 {
+  font-size: var(--text-base);
+}
+
+p {
+  margin: 0;
+}
+
+/* The chosen-file and warning lists are real lists, so their markers stay: the marker
+   is part of how each item reads. */
+ul,
+ol {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+/* Controls take the page's type and colour rather than the platform's. */
+button,
+input,
+textarea,
+select {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+/* Growable downwards, never draggable wider than its own container. */
+textarea {
+  resize: vertical;
+}
+
+/* Placeholder text is a hint the reader must still be able to read, so it uses the
+   muted text colour instead of the browser's lighter default. */
+::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
+a {
+  color: var(--color-accent);
+  text-underline-offset: 0.15em;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+/*
+ * Focus treatment.
+ * One rule draws the same ring for every interactive element, keyboard-reachable or
+ * not, and uses `outline` rather than `box-shadow` so it also survives high-contrast
+ * and forced-colors modes. Nothing in this project may remove it.
+ */
+
+:focus {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Pointer focus (a click, not a Tab) hides the ring where :focus-visible is supported.
+   A browser that does not support :focus-visible drops this rule outright and keeps the
+   :focus ring above, so the outline is suppressed only where a replacement is honoured
+   - never removed outright. */
+:focus:not(:focus-visible) {
+  outline: none;
+}

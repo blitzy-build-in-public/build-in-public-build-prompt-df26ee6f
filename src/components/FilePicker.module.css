@@ -1,0 +1,226 @@
+/*
+ * File picker: the labelled native file input, the drop target beside it, the chosen-file
+ * list and the inline refusals the component reports (AAP Component 13).
+ *
+ * The labelled input is the primary way in and the drop zone is an addition to it rather
+ * than a replacement, so each keeps its own visible boundary instead of merging into one
+ * custom control (NFR-4). Every colour, size, radius and type value below is a custom
+ * property declared in `src/app/globals.css` - this file declares none of its own, and it
+ * removes no outline, because the global `:focus` ring is what a keyboard user navigates by.
+ *
+ * Equal-specificity rules are ordered so a state reads last: `.dropZoneActive` follows
+ * `.dropZone`, and the rules for the inert state follow the rules they soften.
+ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* A file name or a refusal sentence is longer than a 320px column; allowing this box to
+     shrink below its content keeps the picker from widening the page. */
+  min-inline-size: 0;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.input {
+  /* The real control, shown as itself: a restyled input still selects files with the
+     keyboard, where a hidden input behind a decorative button need not. */
+  display: block;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+/* The control's own button, restyled rather than hidden, so the input reads as a button
+   without ceasing to be one. */
+.input::file-selector-button {
+  margin-inline-end: var(--space-3);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dropZone {
+  padding-block: var(--space-5);
+  padding-inline: var(--space-4);
+  /* Dashed, so the alternative is distinguishable from the solid-bordered primary input
+     even without colour. */
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* A file is over the zone. The border turns solid as well as changing colour, so the state
+   is not carried by colour alone. */
+.dropZoneActive {
+  border-style: solid;
+  border-color: var(--color-accent);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Each row names its file, its size and its Remove control, so a list marker would repeat
+     nothing the row does not already say. */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fileRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+}
+
+/* Wraps within the row rather than stretching it: at 320px the size and the Remove control
+   move to the next line instead of colliding with the name. */
+.fileName {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.fileSize {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  /* Sizes in a list of files are compared by eye, so their digits align. */
+  font-variant-numeric: tabular-nums;
+}
+
+.removeButton {
+  flex: 0 0 auto;
+  min-block-size: 2.75rem;
+  min-inline-size: 2.75rem;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Refusals the picker reports inline: one sentence per file, naming it and saying why it
+   was not accepted. The sentence carries the meaning; the colour only sorts the block. */
+.refusals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+}
+
+.refusalItem {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Inert: the picker while a generation is streaming. The component puts this class on the
+ * controls it disables, or on the container holding them, so every rule is written to read
+ * correctly in both positions - on the control itself, and as a descendant of the container.
+ * The native `disabled` attribute is honoured alongside the class, since the real controls
+ * carry it.
+ */
+
+.disabled,
+.disabled .label,
+.disabled .input,
+.disabled .dropZone,
+.disabled .fileName,
+.disabled .fileSize,
+.disabled .removeButton {
+  /* Muted rather than faded: transparency would drop the text below the 4.5:1 floor this
+     interface holds itself to, while the muted token keeps 6.95:1 on the page background. */
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.disabled .input,
+.disabled .dropZone,
+.disabled .removeButton,
+.input:disabled,
+.removeButton:disabled {
+  background-color: var(--color-bg);
+  border-color: var(--color-border);
+}
+
+.disabled .input::file-selector-button,
+.input:disabled::file-selector-button {
+  background-color: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* The inert drop zone keeps a boundary of its own: dotted rather than dashed, so it stays
+   distinguishable from the enabled zone even where the muted fill it takes matches the
+   surface behind the picker, and the cue is a border style rather than a colour. */
+.disabled .dropZone {
+  border-style: dotted;
+}
+
+/* Hover only where a pointer can hover, so a touch device keeps no sticky highlight. */
+@media (hover: hover) {
+  .input::file-selector-button:hover {
+    border-color: var(--color-text-muted);
+  }
+
+  .removeButton:hover {
+    border-color: var(--color-text-muted);
+    background-color: var(--color-bg);
+  }
+}
+
+/* Transitions are decoration and are declared only for a reader who has not asked for less
+   motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .dropZone {
+    transition:
+      border-color 150ms ease-out,
+      background-color 150ms ease-out,
+      color 150ms ease-out;
+  }
+
+  .removeButton,
+  .input::file-selector-button {
+    transition:
+      border-color 150ms ease-out,
+      background-color 150ms ease-out;
+  }
+}

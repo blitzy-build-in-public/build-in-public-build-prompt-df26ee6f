@@ -1,5 +1,8 @@
 import type { NextConfig } from 'next';
 
+// No Content-Security-Policy is set on purpose: Next.js needs inline bootstrap scripts, so a
+// static policy would either break hydration or degrade to 'unsafe-inline', and the generated
+// draft is rendered as text, which already removes the cross-site-scripting surface a CSP covers.
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

@@ -14,20 +14,25 @@
  * sentence exists for it.
  *
  * Nothing here touches the network, a credential, a file or the wall clock: every input is a string
- * built in memory and assembly is pure. The last group checks the module's two real consumers — the
- * prompt template that renders the bundle and the request log that records its count.
+ * built in memory and assembly is pure. The suite is scoped to this module alone: its imports are
+ * `src/lib/source.ts` and the two contract modules that one names — `src/lib/validation.ts` for the
+ * caps the warning sentences quote, and `@/types` for the shapes it takes and returns.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { Buffer } from 'node:buffer';
 
-import { logRequest } from '@/lib/log';
-import { renderInput } from '@/lib/prompt';
+import { describe, expect, it } from 'vitest';
+
 import { buildSourceBundle } from '@/lib/source';
 import { MAX_DESCRIPTION_CHARS, MAX_SOURCE_CHARS } from '@/lib/validation';
-import type { ExtractedDocument, RejectionReason } from '@/types';
+import type { ExtractedDocument, RejectedDocument, RejectionReason } from '@/types';
 
 /**
  * One document as extraction hands it over, with the text fixing `chars` so a fixture cannot
  * disagree with itself. `extra` carries the cases a caller's own flags cover.
+ *
+ * `bytes` is the UTF-8 byte length of the uploaded file, which is what extraction measures; it is a
+ * different quantity from `chars`, a count of UTF-16 code units, and the two diverge as soon as the
+ * text holds a non-ASCII character.
  */
 function document(
   name: string,
@@ -37,12 +42,24 @@ function document(
   return {
     name,
     kind: 'text',
-    bytes: text.length,
+    bytes: Buffer.byteLength(text, 'utf8'),
     chars: text.length,
     text,
     truncated: false,
     ...extra,
   };
+}
+
+/**
+ * Whether a string holds an unpaired UTF-16 surrogate code unit.
+ *
+ * `\p{Surrogate}` matches a code point in the surrogate range, and that range holds exactly a half
+ * that lost its partner: a complete astral character is one code point outside it and never matches.
+ * The `u` flag is what makes the pattern read code points rather than code units, so this is asked of
+ * the whole returned string rather than of one index in it.
+ */
+function hasLoneSurrogate(text: string): boolean {
+  return /\p{Surrogate}/u.test(text);
 }
 
 /** The closed set of reasons a file can be dropped, quoted from the shared contract. */
@@ -131,6 +148,37 @@ describe('buildSourceBundle, budget order', () => {
     expect(bundle.sourceChars).toBe(MAX_SOURCE_CHARS);
   });
 
+  it('counts a description at its cap first, and truncates the document behind it', () => {
+    // The description cap (10,000) sits below the source budget (60,000), which is why the
+    // description is counted first and kept whole: a description the route accepted can never be
+    // displaced by a document, and a document that does not fit behind it is cut to what remains.
+    const description = 'x'.repeat(MAX_DESCRIPTION_CHARS);
+    const text = 'y'.repeat(MAX_SOURCE_CHARS);
+
+    const bundle = buildSourceBundle(description, [document('long.md', text)]);
+    const kept = bundle.documents[0]?.text ?? '';
+
+    expect(bundle.description).toBe(description);
+    expect(bundle.documents[0]?.truncated).toBe(true);
+    expect(kept).toHaveLength(MAX_SOURCE_CHARS - MAX_DESCRIPTION_CHARS);
+    expect(kept).toBe(text.slice(0, MAX_SOURCE_CHARS - MAX_DESCRIPTION_CHARS));
+    expect(bundle.warnings).toHaveLength(1);
+    expect(bundle.sourceChars).toBe(MAX_SOURCE_CHARS);
+    expect(bundle.sourceChars).toBe(description.length + kept.length);
+  });
+
+  it('carries a document through with its own name, kind and byte length', () => {
+    // The em dash is one code unit and three bytes, so this document's `bytes` and `chars` differ:
+    // the equality below is what shows the byte length survives assembly rather than being
+    // recomputed from the text.
+    const brief = document('brief.md', 'Requirements — with an em dash.');
+
+    const bundle = buildSourceBundle('', [brief]);
+
+    expect(brief.bytes).toBeGreaterThan(brief.chars);
+    expect(bundle.documents[0]).toEqual(brief);
+  });
+
   it('truncates a document at exactly the characters that remain and says so', () => {
     const description = 'Steer the draft.';
 
@@ -166,17 +214,25 @@ describe('buildSourceBundle, budget order', () => {
   });
 
   it('keeps every document in upload order, whatever the budget does to it', () => {
+    // Two documents that each fit alone and not together, then a third that arrives after the budget
+    // is spent: the second is cut to what the first left, the third keeps nothing, and all three come
+    // back in the order they were uploaded, each flagged for what happened to it.
+    const shared = 40_000;
     const bundle = buildSourceBundle('', [
-      document('first.txt', 'one'),
-      document('second.md', 'b'.repeat(MAX_SOURCE_CHARS)),
+      document('first.txt', 'a'.repeat(shared)),
+      document('second.md', 'b'.repeat(shared)),
       document('third.pdf', 'three'),
     ]);
+    const kept = bundle.documents.map((entry) => entry.chars);
 
     expect(bundle.documents.map((entry) => entry.name)).toEqual([
       'first.txt',
       'second.md',
       'third.pdf',
     ]);
+    expect(kept).toEqual([shared, MAX_SOURCE_CHARS - shared, 0]);
+    expect(kept[0]).toBeGreaterThan(kept[1] ?? 0);
+    expect(kept[1]).toBeGreaterThan(kept[2] ?? 0);
     expect(bundle.documents.map((entry) => entry.truncated)).toEqual([false, true, true]);
     expect(bundle.warnings).toHaveLength(2);
   });
@@ -237,17 +293,35 @@ describe('buildSourceBundle, the budget as a ceiling', () => {
   });
 
   it('never leaves a lone surrogate where the cut falls inside an astral character', () => {
+    // The budget lands one code unit into the compass emoji: 59,999 ASCII characters, then the high
+    // half of a pair. Cutting there would hand the model half a character, so the cut has to step
+    // back one code unit, and the kept text is one short of the budget because of it.
     const text = 'a'.repeat(MAX_SOURCE_CHARS - 1) + '🧭'.repeat(3);
 
     const bundle = buildSourceBundle('', [document('emoji.md', text)]);
     const kept = bundle.documents[0]?.text ?? '';
 
+    expect(hasLoneSurrogate(kept)).toBe(false);
     expect(kept).toHaveLength(MAX_SOURCE_CHARS - 1);
-    expect(bundle.documents[0]?.chars).toBe(MAX_SOURCE_CHARS - 1);
+    expect(kept).toBe(text.slice(0, MAX_SOURCE_CHARS - 1));
     expect(kept.charCodeAt(kept.length - 1)).toBe('a'.charCodeAt(0));
-    // The kept text survives the JSON encoding the prompt template applies to it, which is what a
-    // lone surrogate would break.
-    expect(JSON.parse(JSON.stringify(kept))).toBe(kept);
+    expect(bundle.documents[0]?.chars).toBe(kept.length);
+    expect(bundle.documents[0]?.truncated).toBe(true);
+  });
+
+  it('spends the whole budget where the cut already falls on a character boundary', () => {
+    // An emoji-only document and no description: the budget is even, so it lands after a complete
+    // pair and the surrogate rule has nothing to give back.
+    const text = '🧭'.repeat(MAX_SOURCE_CHARS / 2 + 1);
+
+    const bundle = buildSourceBundle('', [document('emoji.md', text)]);
+    const kept = bundle.documents[0]?.text ?? '';
+
+    expect(hasLoneSurrogate(kept)).toBe(false);
+    expect(kept).toHaveLength(MAX_SOURCE_CHARS);
+    expect(kept).toBe(text.slice(0, MAX_SOURCE_CHARS));
+    expect(bundle.documents[0]?.chars).toBe(MAX_SOURCE_CHARS);
+    expect(bundle.sourceChars).toBe(MAX_SOURCE_CHARS);
   });
 });
 
@@ -282,21 +356,26 @@ describe('buildSourceBundle, the sentences the user reads', () => {
     expect(bundle.warnings[0]).toContain('"big.md" was truncated');
   });
 
-  it('appends the rejection sentences after the truncation sentences', () => {
-    const bundle = buildSourceBundle(
-      '',
-      [document('big.md', 'z'.repeat(MAX_SOURCE_CHARS + 1))],
-      [
-        { name: 'notes.rtf', reason: 'unsupported-type' },
-        { name: 'scan.pdf', reason: 'empty' },
-      ],
-    );
+  it('appends the rejection sentences after the truncation sentences, in the order given', () => {
+    const rejected: RejectedDocument[] = [
+      { name: 'notes.rtf', reason: 'unsupported-type' },
+      { name: 'scan.pdf', reason: 'empty' },
+    ];
+    const overBudget = (): ExtractedDocument =>
+      document('big.md', 'z'.repeat(MAX_SOURCE_CHARS + 1));
 
-    expect(bundle.warnings.map((warning) => warning.split(' ')[0])).toEqual([
+    const once = buildSourceBundle('', [overBudget()], rejected);
+    const twice = buildSourceBundle('', [overBudget()], rejected);
+
+    expect(once.warnings.map((warning) => warning.split(' ')[0])).toEqual([
       '"big.md"',
       '"notes.rtf"',
       '"scan.pdf"',
     ]);
+    // Truncation notices first, then the rejections in the order validation produced them - and the
+    // same submission assembles the same sentences every time, which is what makes the order a
+    // contract rather than an artefact of the run.
+    expect(twice.warnings).toEqual(once.warnings);
   });
 
   it('defaults the rejections to none, so the two-argument call assembles the same bundle', () => {
@@ -304,47 +383,5 @@ describe('buildSourceBundle, the sentences the user reads', () => {
 
     expect(bundle.warnings).toEqual([]);
     expect(bundle.sourceChars).toBe(24);
-  });
-});
-
-describe('buildSourceBundle, and its consumers', () => {
-  it('renders the kept source into the model message, with the truncation in both places', () => {
-    const description = 'Steer the draft toward checkout.';
-    const bundle = buildSourceBundle(description, [
-      document('brief.md', 'The requirements.'),
-      document('big.md', 'z'.repeat(MAX_SOURCE_CHARS)),
-    ]);
-    const input = renderInput(bundle);
-
-    expect(input).toContain(description);
-    expect(input).toContain('The requirements.');
-    expect(input).toContain('brief.md');
-    expect(input).toContain('big.md');
-    expect(bundle.documents[1]?.truncated).toBe(true);
-    expect(bundle.sourceChars).toBe(MAX_SOURCE_CHARS);
-  });
-
-  it('records the assembled total the bundle reports, through the metadata-only log', () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const bundle = buildSourceBundle('Steer the draft.', [
-      document('brief.md', 'The requirements.'),
-    ]);
-
-    logRequest({
-      route: 'POST /api/generate',
-      status: 200,
-      durationMs: 1,
-      sourceChars: bundle.sourceChars,
-      documentCount: bundle.documents.length,
-      rejectedCount: 0,
-      truncatedCount: bundle.documents.filter((entry) => entry.truncated).length,
-      model: 'stub',
-    });
-
-    const line = JSON.parse(String(info.mock.calls[0]?.[0])) as { sourceChars: number };
-
-    expect(line.sourceChars).toBe(bundle.sourceChars);
-    expect(info).toHaveBeenCalledTimes(1);
-    info.mockRestore();
   });
 });

@@ -1,13 +1,26 @@
 /**
- * Unit suite for the submission gate, `src/lib/validation.ts`: the caps the rest of the tree imports,
- * the extension allow-list and the leading-byte confirmation behind it, and every rejection reason
- * this module produces.
+ * Unit suite for the submission gate, `src/lib/validation.ts` — the module that decides what a draft
+ * may be generated from: the caps the rest of the tree imports, the extension allow-list with the
+ * leading-byte confirmation behind it, and the three file-level rejection reasons this module
+ * produces, `unsupported-type`, `too-large` and `too-many-files`.
+ *
+ * Both failure classes of the one limit rule are exercised here. A request-level breach fails the
+ * request as an `AppError` carrying a code from the closed set in `@/types`: the pasted description
+ * past its cap, or a description that is not a string at all. A file-level breach is returned, never
+ * thrown, as a `RejectedDocument` warning while the rest of the submission proceeds, so one bad
+ * attachment never costs the user the draft the other files would have produced (FR-2, FR-3).
+ *
+ * Suite boundary. This file covers those three reasons and nothing else. `empty` and
+ * `extraction-failed` are facts extraction establishes, not this module, and are asserted in
+ * `tests/unit/extract.test.ts`; `PAYLOAD_TOO_LARGE` is raised by the route handler from
+ * `Content-Length` before the body is read at all, so it belongs with the handler's own suite.
  *
  * Everything here is pure. Uploads are handed over as `Uint8Array` content, so the suite needs no
- * DOM, no network and no credential, and each test states the behaviour it asserts rather than the
- * function it calls.
+ * DOM, no network, no credential and no mock, and each test states the behaviour it asserts rather
+ * than the function it calls.
  */
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -59,6 +72,25 @@ function catchThrown(run: () => unknown): unknown {
   throw new Error('Expected the call to throw, and it returned instead.');
 }
 
+/**
+ * Read a committed fixture as bytes, whichever directory the run was started from.
+ *
+ * `process.cwd()` is the repository root under Vitest, and the `import.meta.url` fallback covers a
+ * run launched from somewhere else, such as an editor's test task. Reading synchronously keeps the
+ * tests that use a fixture synchronous. The bytes are copied into a fresh `Uint8Array` because Node
+ * pools the allocations of files this small, so a view would carry a neighbour's bytes in its
+ * buffer.
+ */
+function fixtureBytes(name: string): Uint8Array {
+  const fromRoot = path.resolve(process.cwd(), 'tests/fixtures', name);
+
+  try {
+    return new Uint8Array(readFileSync(fromRoot));
+  } catch {
+    return new Uint8Array(readFileSync(new URL(`../fixtures/${name}`, import.meta.url)));
+  }
+}
+
 /** One allow-listed extension, with content that genuinely is that format. */
 const SAMPLES: Array<{ name: string; bytes: Uint8Array; kind: FileKind }> = [
   {
@@ -73,30 +105,33 @@ const SAMPLES: Array<{ name: string; bytes: Uint8Array; kind: FileKind }> = [
 ];
 
 describe('limits', () => {
+  // One value at a time, so a failure names the constant that moved. These eight figures are consumed
+  // outside this module — `src/lib/rate-limit.ts` sizes its window from two of them, the route handler
+  // takes its generation deadline from one, the server page builds the client-safe `Limits` from four,
+  // and the README states them to the reader — so a silent edit here is a cross-tier break rather than
+  // a local change.
   it('declares every limit the rest of the tree imports at its specified value', () => {
-    expect({
-      MAX_FILES,
-      MAX_FILE_BYTES,
-      MAX_REQUEST_BYTES,
-      MAX_DESCRIPTION_CHARS,
-      MAX_SOURCE_CHARS,
-      RATE_LIMIT_MAX,
-      RATE_LIMIT_WINDOW_MS,
-      GENERATION_TIMEOUT_MS,
-    }).toEqual({
-      MAX_FILES: 5,
-      MAX_FILE_BYTES: 8_388_608,
-      MAX_REQUEST_BYTES: 16_777_216,
-      MAX_DESCRIPTION_CHARS: 10_000,
-      MAX_SOURCE_CHARS: 60_000,
-      RATE_LIMIT_MAX: 10,
-      RATE_LIMIT_WINDOW_MS: 600_000,
-      GENERATION_TIMEOUT_MS: 90_000,
-    });
+    expect(MAX_FILES).toBe(5);
+    expect(MAX_FILE_BYTES).toBe(8_388_608);
+    expect(MAX_REQUEST_BYTES).toBe(16_777_216);
+    expect(MAX_DESCRIPTION_CHARS).toBe(10_000);
+    expect(MAX_SOURCE_CHARS).toBe(60_000);
+    expect(RATE_LIMIT_MAX).toBe(10);
+    expect(RATE_LIMIT_WINDOW_MS).toBe(600_000);
+    expect(GENERATION_TIMEOUT_MS).toBe(90_000);
   });
 
   it('declares the extension allow-list in the order the plan states', () => {
     expect(ACCEPTED_EXTENSIONS).toEqual(['.txt', '.md', '.markdown', '.pdf', '.docx']);
+  });
+
+  it('keeps every format the application cannot read off the allow-list', () => {
+    // A file outside the list is refused with a reason rather than routed to a parser that does not
+    // exist for it: no OCR for images, no legacy `.doc` reader, no spreadsheet or RTF support.
+    expect(ACCEPTED_EXTENSIONS).not.toContain('.rtf');
+    expect(ACCEPTED_EXTENSIONS).not.toContain('.doc');
+    expect(ACCEPTED_EXTENSIONS).not.toContain('.csv');
+    expect(ACCEPTED_EXTENSIONS).not.toContain('.png');
   });
 
   it('sizes the request cap above the file cap and the source cap above the description cap', () => {
@@ -147,6 +182,24 @@ describe('classifyFile', () => {
     ).toBeNull();
   });
 
+  it('classifies text bytes as text however the text reads, a PDF header included', () => {
+    // The confirmation a text format has to pass is "valid UTF-8", and `%PDF-1.7` is ASCII. Those five
+    // bytes are also what makes a file a PDF, but only under a `.pdf` name, where nothing else passes
+    // the check — the pairing of name and bytes is what decides the kind.
+    expect(classifyFile(submitted('notes.txt', encode('%PDF-1.7')))).toBe('text');
+    expect(classifyFile(submitted('notes.md', encode('%PDF-1.7')))).toBe('text');
+    expect(classifyFile(submitted('brief.pdf', encode('%PDF-1.7')))).toBe('pdf');
+  });
+
+  it('refuses a .txt whose bytes are PDF binary rather than text', () => {
+    // `%PDF-` followed by the binary comment a real PDF carries: the lead bytes look like a PDF and the
+    // content is not decodable text, so under a `.txt` name this is a file no parser could safely be
+    // handed, and it is refused rather than guessed at.
+    const pdfBinary = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0xff, 0xfe, 0x00]);
+
+    expect(classifyFile(submitted('brief.txt', pdfBinary))).toBeNull();
+  });
+
   it('classifies an empty text file as text, leaving emptiness to extraction', () => {
     // The kind is a fact about the extension and the bytes. That the document carries no requirements
     // is a fact about its content, which `src/lib/extract.ts` reports as `empty`.
@@ -180,14 +233,15 @@ describe('classifyFile', () => {
   });
 
   it('classifies the repository fixtures as the formats they are', () => {
-    expect(classifyFile(submitted('minimal.pdf', readFileSync('tests/fixtures/minimal.pdf')))).toBe(
-      'pdf',
-    );
-    expect(
-      classifyFile(
-        submitted('sample-requirements.md', readFileSync('tests/fixtures/sample-requirements.md')),
-      ),
-    ).toBe('text');
+    const pdf = fixtureBytes('minimal.pdf');
+    const brief = fixtureBytes('sample-requirements.md');
+
+    expect(classifyFile(submitted('minimal.pdf', pdf))).toBe('pdf');
+    expect(classifyFile(submitted('sample-requirements.md', brief))).toBe('text');
+
+    // The text fixture is asserted to be the brief it claims to be, so a truncated or re-encoded copy
+    // fails here rather than passing as an anonymous block of text.
+    expect(new TextDecoder().decode(brief)).toContain('# Support Triage Assistant');
   });
 });
 
@@ -196,6 +250,14 @@ describe('descriptionSchema', () => {
     expect(descriptionSchema.safeParse('').success).toBe(true);
     expect(descriptionSchema.safeParse('x'.repeat(MAX_DESCRIPTION_CHARS)).success).toBe(true);
     expect(descriptionSchema.safeParse('é'.repeat(MAX_DESCRIPTION_CHARS)).success).toBe(true);
+  });
+
+  it('returns a short description unchanged, applying no trim and no other transform', () => {
+    // The schema caps the length and does nothing else, so what the model is given is what the user
+    // pasted and no tier has to reason about a normalised copy of it.
+    const pasted = '  Add a file or paste a description.  ';
+
+    expect(descriptionSchema.parse(pasted)).toBe(pasted);
   });
 
   it('measures length in UTF-16 code units, as the source budget and the browser counter do', () => {
@@ -224,10 +286,17 @@ describe('descriptionSchema', () => {
 
 describe('validateSubmission, request-level breaches', () => {
   it('refuses a description over the cap with a 400 that names both counts and offers no retry', () => {
-    const thrown = catchThrown(() => validateSubmission('x'.repeat(MAX_DESCRIPTION_CHARS + 1), []));
+    const overCap = 'x'.repeat(MAX_DESCRIPTION_CHARS + 1);
+
+    expect(() => validateSubmission(overCap, [])).toThrow(AppError);
+
+    const thrown = catchThrown(() => validateSubmission(overCap, []));
     const envelope = toErrorEnvelope(thrown);
 
     expect(thrown).toBeInstanceOf(AppError);
+    // `AppError` extends `Error`, so a caller catching broadly still sees a real error rather than a
+    // value it has to recognise by shape.
+    expect(thrown).toBeInstanceOf(Error);
     expect(envelope.status).toBe(400);
     expect(envelope.body.code).toBe('INVALID_INPUT');
     expect(envelope.body.retryable).toBe(false);
@@ -366,6 +435,47 @@ describe('validateSubmission, file-level breaches', () => {
     ]);
   });
 
+  it('reports a text file whose bytes are not UTF-8 as an unsupported type', () => {
+    const files = [submitted('brief.txt', new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0xff]))];
+
+    expect(() => validateSubmission('', files)).not.toThrow();
+
+    const { accepted, rejected } = validateSubmission('', files);
+
+    expect(accepted).toEqual([]);
+    expect(rejected).toEqual([{ name: 'brief.txt', reason: 'unsupported-type' }]);
+  });
+
+  it('returns every violation of one mixed submission and still accepts the files that are fine', () => {
+    // All three reasons this module produces, in a submission that also carries three good files: each
+    // bad file is reported under the first rule it broke, and a rejected file still occupies its slot
+    // in the count, so the good file sitting behind two of them is unaffected.
+    const files = [
+      submitted('brief.exe', encode('MZ')),
+      textFile('one.md'),
+      submitted('huge.pdf', new Uint8Array(MAX_FILE_BYTES + 1)),
+      textFile('two.md'),
+      textFile('three.md'),
+      submitted('brief.rtf', encode('{\\rtf1}')),
+      textFile('four.md'),
+    ];
+
+    expect(() => validateSubmission('', files)).not.toThrow();
+
+    const { accepted, rejected } = validateSubmission('', files);
+
+    expect(accepted.map((file) => file.name)).toEqual(['one.md', 'two.md', 'three.md']);
+    expect(rejected).toEqual([
+      { name: 'brief.exe', reason: 'unsupported-type' },
+      { name: 'huge.pdf', reason: 'too-large' },
+      { name: 'brief.rtf', reason: 'too-many-files' },
+      { name: 'four.md', reason: 'too-many-files' },
+    ]);
+    expect(new Set(rejected.map((file) => file.reason))).toEqual(
+      new Set(['unsupported-type', 'too-large', 'too-many-files']),
+    );
+  });
+
   it('produces rejections that carry a name and a reason and nothing else', () => {
     const { rejected } = validateSubmission('', [submitted('one.exe', encode('MZ'))]);
 
@@ -381,6 +491,11 @@ describe('validateSubmission, accepted files', () => {
     const [file] = accepted;
 
     expect(file).toMatchObject({ name: 'brief.md', kind: 'text', bytes: content.byteLength });
+    // `bytes` is the file's size and `body` its content, which is the pair extraction needs. The key
+    // set is asserted whole, so a field added here later is a deliberate change rather than a silent
+    // one.
+    expect(Object.keys(file ?? {})).toEqual(['name', 'kind', 'bytes', 'body']);
+    expect(file?.body).toBeInstanceOf(ArrayBuffer);
     expect(decode(file?.body ?? new ArrayBuffer(0))).toBe(
       'Requirements: add a file or paste a description.',
     );
@@ -409,5 +524,36 @@ describe('validateSubmission, accepted files', () => {
       ['brief.docx', 'docx'],
     ]);
     expect(rejected).toEqual([]);
+  });
+});
+
+describe('validateSubmission, the client-declared MIME type', () => {
+  // A real `File` part, as the browser sends one, read the way the route handler reads an upload: the
+  // name and the bytes. The declared type reaches nothing — it is not a parameter of this module — so
+  // a part that lies about what it is cannot route itself to the wrong parser.
+  it('takes a part declared application/pdf whose name and bytes are text as text', async () => {
+    const part = new File(['Add a file or paste a description.'], 'brief.txt', {
+      type: 'application/pdf',
+    });
+
+    const { accepted, rejected } = validateSubmission('', [
+      submitted(part.name, new Uint8Array(await part.arrayBuffer())),
+    ]);
+
+    expect(rejected).toEqual([]);
+    expect(accepted.map((file) => [file.name, file.kind])).toEqual([['brief.txt', 'text']]);
+  });
+
+  it('refuses a part declared text/plain whose .pdf name its bytes do not support', async () => {
+    const part = new File(['Requirements: add a file.'], 'brief.pdf', {
+      type: 'text/plain',
+    });
+
+    const { accepted, rejected } = validateSubmission('', [
+      submitted(part.name, new Uint8Array(await part.arrayBuffer())),
+    ]);
+
+    expect(accepted).toEqual([]);
+    expect(rejected).toEqual([{ name: 'brief.pdf', reason: 'unsupported-type' }]);
   });
 });

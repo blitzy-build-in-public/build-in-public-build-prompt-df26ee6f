@@ -39,6 +39,7 @@ const DELTA_TWO: GenerationEvent = { type: 'delta', text: 'Goals\n' };
 
 const MISSING_TERMINAL = /did not finish|unexpectedly/i;
 
+/** A streamed response whose body yields each chunk in order and then closes. */
 function responseOfChunks(chunks: readonly Uint8Array[]): Response {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -51,6 +52,7 @@ function responseOfChunks(chunks: readonly Uint8Array[]): Response {
   return new Response(stream, { headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
 }
 
+/** The same, from textual chunks — one chunk per string, each encoded as UTF-8. */
 function responseOfText(chunks: readonly string[]): Response {
   return responseOfChunks(chunks.map((chunk) => encoder.encode(chunk)));
 }
@@ -83,19 +85,47 @@ class LiveStream {
   }
 }
 
+/**
+ * Reads `response` and records every dispatched event.
+ *
+ * `settled` is the parse promise to await. `waitForEvents` resolves once `count` events have been
+ * recorded, so a test waits for delivery itself instead of polling the clock for it.
+ */
 function collect(
   response: Response,
   signal?: AbortSignal,
-): { events: GenerationEvent[]; settled: Promise<void> } {
+): {
+  events: GenerationEvent[];
+  settled: Promise<void>;
+  waitForEvents: (count: number) => Promise<void>;
+} {
   const events: GenerationEvent[] = [];
+  const waiters: Array<{ count: number; resolve: () => void }> = [];
   const settled = parseEventStream(
     response,
     (event) => {
       events.push(event);
+      for (const waiter of [...waiters]) {
+        if (events.length < waiter.count) {
+          continue;
+        }
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve();
+      }
     },
     signal ?? new AbortController().signal,
   );
-  return { events, settled };
+
+  const waitForEvents = (count: number): Promise<void> => {
+    if (events.length >= count) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      waiters.push({ count, resolve });
+    });
+  };
+
+  return { events, settled, waitForEvents };
 }
 
 afterEach(() => {
@@ -124,6 +154,19 @@ describe('the exported grammar constants', () => {
       expect(frame).not.toContain('event:');
       expect(frame).not.toContain('retry:');
     }
+  });
+
+  it('escapes consecutive newlines inside a delta so the frame never carries a second line', () => {
+    const delta: GenerationEvent = { type: 'delta', text: 'a\n\nb' };
+    const frame = encodeEvent(delta);
+
+    // The blank line that ends the frame is the only line break in it: the payload's newlines travel
+    // as JSON escapes, which is what stops a delta's own text from splitting the frame around it.
+    expect(frame.split('data: ')).toHaveLength(2);
+    expect(frame).toContain('"text":"a\\n\\nb"');
+    expect(frame.endsWith('\n\n')).toBe(true);
+    expect(frame.slice(0, -2)).not.toContain('\n');
+    expect(JSON.parse(frame.slice('data: '.length))).toEqual(delta);
   });
 });
 
@@ -173,6 +216,31 @@ describe('parseEventStream on a well-formed stream', () => {
       bytes.slice(0, cut),
       bytes.slice(cut),
       encoder.encode(encodeEvent(DONE)),
+    ]);
+    const { events, settled } = collect(response);
+
+    await expect(settled).resolves.toBeUndefined();
+    expect(events).toEqual([DELTA_ONE, DONE]);
+  });
+
+  it('dispatches three frames delivered in a single chunk in order', async () => {
+    const response = responseOfText([
+      `${encodeEvent(META)}${encodeEvent(DELTA_ONE)}${encodeEvent(DONE)}`,
+    ]);
+    const { events, settled } = collect(response);
+
+    await expect(settled).resolves.toBeUndefined();
+    expect(events).toEqual([META, DELTA_ONE, DONE]);
+  });
+
+  it('parses a frame split exactly between its two terminating newlines', async () => {
+    const frame = encodeEvent(DELTA_ONE);
+    // The first chunk ends on the first of the frame's two terminating newlines, so the boundary is
+    // not in the buffer yet and the frame has to be held until the second one arrives.
+    expect(frame.endsWith('\n\n')).toBe(true);
+    const response = responseOfChunks([
+      encoder.encode(frame.slice(0, -1)),
+      encoder.encode(`${frame.slice(-1)}${encodeEvent(DONE)}`),
     ]);
     const { events, settled } = collect(response);
 
@@ -281,6 +349,15 @@ describe('parseEventStream on a damaged stream', () => {
     await expect(settled).rejects.toThrow(MISSING_TERMINAL);
   });
 
+  it('rejects when the body closes with no frames at all', async () => {
+    const { events, settled } = collect(responseOfText([]));
+
+    // An empty body is not a completed generation: no meta and no terminal frame were seen, so it
+    // reports the same actionable failure a stream that stopped mid-draft does.
+    await expect(settled).rejects.toThrow(MISSING_TERMINAL);
+    expect(events).toEqual([]);
+  });
+
   it('rejects with the retryable message, preserving the cause, when the body fails mid-stream', async () => {
     const live = new LiveStream();
     const failure = new Error('socket closed');
@@ -312,13 +389,13 @@ describe('parseEventStream and the caller signal', () => {
   it('resolves rather than rejecting when the signal aborts mid-stream, dispatching nothing more', async () => {
     const live = new LiveStream();
     const controller = new AbortController();
-    const { events, settled } = collect(live.response, controller.signal);
+    const { events, settled, waitForEvents } = collect(live.response, controller.signal);
 
     live.push(encodeEvent(META));
     live.push(encodeEvent(DELTA_ONE));
-    await vi.waitFor(() => {
-      expect(events).toHaveLength(2);
-    });
+    // Wait for the events themselves rather than for the clock: the abort has to land on a stream
+    // whose next read is already pending, and the test must not depend on elapsed time to get there.
+    await waitForEvents(2);
 
     controller.abort();
     await expect(settled).resolves.toBeUndefined();

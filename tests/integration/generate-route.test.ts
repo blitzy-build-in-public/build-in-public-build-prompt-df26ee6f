@@ -27,8 +27,8 @@ import { readFileSync } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_MODEL, type Provider } from '@/lib/provider';
-import { SECTION_SKELETON } from '@/lib/prompt';
+import { DEFAULT_MODEL, MAX_OUTPUT_TOKENS, type Provider } from '@/lib/provider';
+import { SECTION_SKELETON, SYSTEM_INSTRUCTION } from '@/lib/prompt';
 import { KEEPALIVE_INTERVAL_MS, MIN_WRITE_BYTES, parseEventStream } from '@/lib/sse';
 import {
   GENERATION_TIMEOUT_MS,
@@ -39,7 +39,12 @@ import {
   MAX_SOURCE_CHARS,
   RATE_LIMIT_MAX,
 } from '@/lib/validation';
-import type { GenerateErrorEnvelope, GenerationEvent, ProviderEvent } from '@/types';
+import type {
+  BuildPromptRequest,
+  GenerateErrorEnvelope,
+  GenerationEvent,
+  ProviderEvent,
+} from '@/types';
 
 /**
  * The endpoint under test, as an absolute URL: `Request` refuses a relative one.
@@ -494,6 +499,23 @@ describe('POST /api/generate: the draft it streams', () => {
   });
 });
 
+describe('POST /api/generate: what the module declares', () => {
+  it('runs on the Node runtime and keeps its own deadline inside the hosting hint', async () => {
+    // Both facts are declarations rather than behaviour: the runtime is the one the document
+    // extractors need, and `maxDuration` is the hint that stops a hosting platform killing the
+    // invocation before the handler can write its terminal frame.
+    const route = await import('@/app/api/generate/route');
+
+    expect(route.runtime).toBe('nodejs');
+    expect(route.maxDuration).toBe(90);
+    // The bound itself is the handler's own, and the deadline case below observes it firing.
+    expect(GENERATION_TIMEOUT_MS).toBe(90_000);
+    // The hint may not fire before the handler's own deadline, or the graceful path would lose the
+    // race to the platform and the client would see a stream with no terminal frame.
+    expect(GENERATION_TIMEOUT_MS).toBeLessThanOrEqual(route.maxDuration * 1_000);
+  });
+});
+
 describe('POST /api/generate: a submission it cannot generate from', () => {
   it('answers 400 INVALID_INPUT for a description past its limit, naming the count and the limit', async () => {
     const POST = await loadPost();
@@ -546,6 +568,34 @@ describe('POST /api/generate: a submission it cannot generate from', () => {
     expect(envelope.message).toMatch(/could not be read/i);
   });
 
+  it('spends no model call on a submission it refuses', async () => {
+    // A double whose only job is to be reached or not reached: the caps are enforced before a provider
+    // is selected, so a refused submission must never spend a model call, and reaching this one is a
+    // loud failure rather than a quietly successful draft.
+    const generate = vi.fn((): AsyncIterable<ProviderEvent> => {
+      throw new Error('A refused submission reached the provider.');
+    });
+    useProvider({ model: 'unreachable-model', generate });
+    const POST = await loadPost();
+
+    // Past the description cap, and a submission with nothing usable in it: an unsupported file and
+    // no pasted text at all. Neither may cost a model call.
+    const overLong = await POST(
+      generateRequest({ description: 'x'.repeat(MAX_DESCRIPTION_CHARS + 1) }),
+    );
+    const nothingUsable = await POST(generateRequest({ files: [textUpload('notes.rtf', 'r')] }));
+
+    for (const response of [overLong, nothingUsable]) {
+      expect(response.status).toBe(400);
+
+      const envelope = await readEnvelope(response);
+      expect(envelope.code).toBe('INVALID_INPUT');
+      expect(envelope.retryable).toBe(false);
+    }
+
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('answers 413 PAYLOAD_TOO_LARGE from Content-Length before the body is read', async () => {
     const POST = await loadPost();
     const declared = MAX_REQUEST_BYTES + 1;
@@ -579,6 +629,10 @@ describe('POST /api/generate: a submission it cannot generate from', () => {
     const submission = (): Request =>
       generateRequest({ description: 'One brief, sent repeatedly.' });
 
+    // The real clock, deliberately: a Node request carries no peer address, so every request in this
+    // in-process run resolves to the rate limiter's shared bucket, and a ten-minute window cannot
+    // close inside a sub-second test. No case depends on elapsed time — this one depends on a window
+    // that cannot expire before the run ends.
     const allowed: number[] = [];
     for (let attempt = 1; attempt <= RATE_LIMIT_MAX; attempt += 1) {
       const response = await POST(submission());
@@ -661,6 +715,54 @@ describe('POST /api/generate: files that break a file-level rule', () => {
     );
     expect(warningFor(meta.warnings, 'sixth.md')).toContain(`at most ${MAX_FILES} files`);
     expect(warningFor(meta.warnings, 'blank.md')).toContain('holds no text that could be read');
+  });
+
+  it('reaches the model with the document it kept and never with the one it dropped', async () => {
+    const keptSentinel = 'SENTINEL-KEPT-DOCUMENT';
+    const droppedSentinel = 'SENTINEL-DROPPED-DOCUMENT';
+    const pastedSentinel = 'SENTINEL-PASTED-DESCRIPTION';
+    const captured: BuildPromptRequest[] = [];
+
+    useProvider({
+      model: 'capturing-model',
+      async *generate(request: BuildPromptRequest): AsyncIterable<ProviderEvent> {
+        captured.push(request);
+        yield { type: 'text', text: '## Overview\n\nA draft.' };
+      },
+    });
+    const POST = await loadPost();
+
+    const response = await POST(
+      generateRequest({
+        description: `${pastedSentinel}: keep the tool small.`,
+        files: [
+          textUpload('kept.md', `# Kept\n\n${keptSentinel}\n`),
+          textUpload('dropped.csv', `owner,area\n${droppedSentinel}\n`),
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    // The submission still generated, and it generated from the file that passed.
+    expect(eventsOfType(await readFrames(response), 'done')).toHaveLength(1);
+
+    const providerRequest = only(captured);
+
+    // The trusted instruction and the untrusted source travel in separate fields of the request, and
+    // the instruction is the prompt module's own constant: no source text reaches the instruction
+    // role, which is the containment this endpoint's security rests on.
+    expect(providerRequest.instructions).toBe(SYSTEM_INSTRUCTION);
+    expect(providerRequest.instructions).not.toContain(keptSentinel);
+    expect(providerRequest.instructions).not.toContain(pastedSentinel);
+
+    // What the model is given is what was kept and nothing else: no text from the dropped file
+    // reaches it, because the sentence explaining a drop is written for the user, not for the model.
+    expect(providerRequest.input).toContain(keptSentinel);
+    expect(providerRequest.input).toContain(pastedSentinel);
+    expect(providerRequest.input).not.toContain(droppedSentinel);
+
+    expect(providerRequest.model).toBe('capturing-model');
+    expect(providerRequest.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS);
   });
 
   it('keeps a document that does not fit the budget, flags it truncated and warns how much was kept', async () => {
